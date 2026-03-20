@@ -21,7 +21,6 @@ WATCHER_ESTABILIDADE_SEGUNDOS = 5
 TRADUCAO_BACKEND = "google_v1"
 
 # Chave para Google Translate API v2 (recomendado: definir no ambiente GOOGLE_TRANSLATE_API_KEY)
-GOOGLE_TRANSLATE_API_KEY = "AIzaSyAdRq63m6VSttvGSq8FzBJKKuxU1SrIIBQ"
 
 # URL da API LibreTranslate (pública)
 LIBRETRANSLATE_URL = "https://libretranslate.de/translate"
@@ -72,3 +71,7 @@ SECONV_MERGE_SRTS = True
 # Aplica ações internas do seconv para reduzir fragmentação do OCR.
 # (útil quando o seconv gera múltiplos segmentos para o mesmo texto)
 SECONV_APPLY_MERGE_ACTIONS = True
+
+# Apaga automaticamente o arquivo .sup extraído após o OCR gerar os .srt.
+# Isso reduz consumo de espaço, já que .sup pode ser muito grande.
+APAGAR_SUP_APOS_OCR = True

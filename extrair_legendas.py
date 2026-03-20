@@ -866,6 +866,15 @@ class MKVExtractor:
                     print(f"Falha no OCR automático da faixa {num}. Abra o .sup no SubtitleEdit para OCR manual.")
                     continue
 
+                # O OCR já gerou (pelo menos) um .srt consolidado.
+                # Se configurado, apaga o `.sup` (pode ser muito grande).
+                if str(_config("APAGAR_SUP_APOS_OCR", True)).lower().strip() in ("1", "true", "yes", "sim"):
+                    try:
+                        if os.path.isfile(path_extraido):
+                            os.remove(path_extraido)
+                    except Exception as e:
+                        print(f"Aviso: não foi possível apagar o .sup ({path_extraido}): {e}")
+
                 destino_pt = self._pt_srt_destino_para_srt_extraido(Path(srt_ocr))
                 print(f"Traduzindo (após OCR) faixa {num}...")
                 if traduzir_arquivo_srt(srt_ocr, str(destino_pt), idioma):
