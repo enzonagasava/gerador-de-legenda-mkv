@@ -1,0 +1,60 @@
+"""
+Configuração do extrator e tradutor de legendas MKV.
+
+Copie este arquivo para `config.py` e ajuste os valores locais.
+"""
+
+# Pastas para varrer em modo lote e watcher (busca recursiva)
+PASTAS = [
+    "/caminho/para/series-ou-torrents",
+]
+
+# Idioma de destino para tradução (pt, en, es, etc.)
+IDIOMA_DESTINO = "pt"
+
+# Segundos para aguardar arquivo estável no watcher (evitar processar durante download)
+WATCHER_ESTABILIDADE_SEGUNDOS = 5
+
+# --- Tradução em Python (após extrair a legenda) ---
+# "google_v1" = Google Translate sem API key (como SubtitleEdit V1; requer deep-translator)
+# "google" = Google Translate API v2 (define `GOOGLE_TRANSLATE_API_KEY` no ambiente)
+# "libretranslate" = API gratuita (sem chave) | "none" = não traduzir
+TRADUCAO_BACKEND = "google_v1"
+
+# URL da API LibreTranslate (pública)
+LIBRETRANSLATE_URL = "https://libretranslate.de/translate"
+
+# --- OCR via SubtitleEdit (para PGS/SUP) ---
+# Informe o caminho do SubtitleEdit (ex.: "/home/user/SubtitleEdit/SubtitleEdit")
+# O SubtitleEdit CLI será invocado para converter e/ou traduzir.
+SUBTITLEEDIT_EXE_PATH = "/caminho/para/SubtitleEdit"
+SUBTITLEEDIT_MONO_CMD = "mono"
+
+# Formato de saída do SubtitleEdit (ver help da opção /convert)
+SUBTITLEEDIT_OCR_OUTPUT_FORMAT = "subrip"
+
+# --- OCR via subtitleedit-cli (seconv) ---
+# Use este caminho quando você quer OCR automatizado (PGS/SUP -> SRT) via CLI.
+SECONV_MODE = "docker"  # "docker" ou "local"
+
+# Imagem Docker que contém o binário `seconv`.
+SECONV_DOCKER_IMAGE = "seconv:1.0"
+
+# Opções extras para `docker run` (string). Ex.: `--network=host`.
+SECONV_DOCKER_RUN_OPTS = ""
+
+# Formato de saída do OCR.
+SECONV_OCR_OUTPUT_FORMAT = "subrip"
+
+# Banco OCR usado pelo seconv para BDSup/PGS (ex.: "Latin" ou "Japan")
+SECONV_OCR_DB = "Latin"
+
+# Ao invés de traduzir apenas o "melhor" SRT, o script consolida TODOS os SRT
+SECONV_MERGE_SRTS = True
+
+# Aplica ações internas do seconv para reduzir fragmentação do OCR.
+SECONV_APPLY_MERGE_ACTIONS = True
+
+# Apaga automaticamente o arquivo .sup extraído após o OCR gerar os .srt.
+APAGAR_SUP_APOS_OCR = True
+

@@ -1,0 +1,7 @@
+# Arquivo de configuração local (não versionar)
+config.py
+
+# Cache Python (opcional, mas comum)
+__pycache__/
+.pytest_cache/
+
