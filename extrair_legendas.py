@@ -430,10 +430,31 @@ class MKVExtractor:
         """True se já tem legenda final (_PT.srt) ou legenda extraída (quando tradução está desligada)."""
         base = Path(arquivo_mkv).stem
         diretorio = Path(arquivo_mkv).parent
-        pt_srt = diretorio / f"{base}_PT.srt"
-        if pt_srt.exists():
-            return True
         backend = str(_config("TRADUCAO_BACKEND", "libretranslate")).lower().strip()
+
+        # Compatibilidade com o padrão antigo (sem faixa) e o padrão novo (com faixa).
+        # - Legenda PT antiga:  {base}_PT.srt
+        # - Legenda PT nova:    {base}_faixaN_PT.srt
+        pt_srt_legado = diretorio / f"{base}_PT.srt"
+        if pt_srt_legado.exists():
+            return True
+
+        if backend != "none":
+            try:
+                for p in diretorio.iterdir():
+                    if not p.is_file():
+                        continue
+                    if p.suffix.lower() != ".srt":
+                        continue
+                    # Ex.: Bluey.S01E51..._faixa2_PT.srt
+                    if p.name.startswith(base + "_faixa") and p.name.endswith("_PT.srt"):
+                        return True
+            except Exception:
+                # Se falhar a varredura, cai no retorno padrão (False).
+                pass
+
+            return False
+
         if backend == "none":
             for p in diretorio.iterdir():
                 if not p.is_file():
@@ -881,6 +902,32 @@ class MKVExtractor:
             except Exception as e:
                 print(f"Erro: {e}")
 
+    def processar_pasta(self, pasta: str) -> None:
+        """
+        Processa somente uma pasta (não recursivo) procurando `*.mkv` no nível 1.
+        Para cada MKV, extrai todas as faixas de legenda e traduz (se habilitado).
+        """
+        pasta = os.path.abspath(pasta)
+        if not os.path.isdir(pasta):
+            print(f"Aviso: pasta não encontrada: {pasta}")
+            return
+
+        mkvs = sorted([str(p) for p in Path(pasta).glob("*.mkv")])
+        if not mkvs:
+            print(f"Nenhum MKV encontrado em: {pasta}")
+            return
+
+        print(f"Encontrados {len(mkvs)} arquivos MKV em: {pasta}")
+        for i, mkv in enumerate(mkvs, 1):
+            if self.ja_extraido(mkv):
+                print(f"[{i}/{len(mkvs)}] Pulando (já extraído): {Path(mkv).name}")
+                continue
+            print(f"[{i}/{len(mkvs)}] Processando: {mkv}")
+            try:
+                self.processar_mkv(mkv, numero_faixa=None, interativo=False)
+            except Exception as e:
+                print(f"Erro: {e}")
+
 
 def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -> None:
     """Monitora pastas e traduz automaticamente legendas.
@@ -1032,7 +1079,8 @@ def main_interativo() -> None:
         print("1. Processar um arquivo MKV")
         print("2. Processar todos os MKVs das pastas (lote)")
         print("3. Iniciar watcher (monitorar pastas)")
-        print("4. Sair")
+        print("4. Processar todos os MKVs de uma pasta (somente essa)")
+        print("5. Sair")
         op = input("\nEscolha: ").strip()
 
         if op == "1":
@@ -1047,6 +1095,12 @@ def main_interativo() -> None:
             atraso = _config("WATCHER_ESTABILIDADE_SEGUNDOS", WATCHER_ESTABILIDADE_PADRAO)
             run_watcher(ext, pastas, atraso)
         elif op == "4":
+            pasta = input("Caminho da pasta MKV: ").strip()
+            if pasta:
+                ext.processar_pasta(pasta)
+            else:
+                print("Caminho inválido.")
+        elif op == "5":
             print("Até mais.")
             break
         else:

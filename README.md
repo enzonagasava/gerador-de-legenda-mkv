@@ -37,7 +37,7 @@ Edite `config.py`:
 python extrair_legendas.py
 ```
 
-Opções: processar um arquivo, processar pastas em lote, iniciar watcher, sair.
+Opções: processar um arquivo, processar pastas em lote, processar uma pasta (somente essa), iniciar watcher, sair.
 
 ### Linha de comando
 
