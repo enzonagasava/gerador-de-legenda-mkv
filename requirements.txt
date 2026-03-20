@@ -1,0 +1,4 @@
+# Tradução e watcher
+requests>=2.28.0
+deep-translator>=1.11.0
+watchdog>=3.0.0
