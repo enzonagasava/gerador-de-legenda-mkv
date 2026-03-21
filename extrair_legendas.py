@@ -32,6 +32,11 @@ try:
 except ImportError:
     config = None
 
+try:
+    import pysubs2
+except ImportError:
+    pysubs2 = None  # type: ignore
+
 PASTAS_PADRAO = [
     "/media/enzo/backup-sdb2/torrents",
     "/media/enzo/backup-sdb2/series",
@@ -199,10 +204,171 @@ def traduzir_arquivo_srt(arquivo_entrada: str, arquivo_saida: str, idioma_destin
     return True
 
 
+# Regex ASS: mesmo padrão de `SSAEvent.OVERRIDE_SEQUENCE` (pysubs2).
+_ASS_OVERRIDE_RE = re.compile(r"{[^}]*}")
+
+
+def _ass_plain_segment(segment: str) -> str:
+    """Texto visível de um segmento de linha ASS (sem tags; \\h vira espaço)."""
+    t = _ASS_OVERRIDE_RE.sub("", segment)
+    t = t.replace(r"\h", " ")
+    t = t.replace(r"\n", "\n")
+    return t
+
+
+def _ass_leading_tags(segment: str) -> Tuple[str, str]:
+    """Tags `{...}` no início do segmento antes do texto visível."""
+    i = 0
+    lead = ""
+    while i < len(segment) and segment[i] == "{":
+        j = segment.find("}", i)
+        if j == -1:
+            break
+        lead += segment[i : j + 1]
+        i = j + 1
+    return lead, segment[i:]
+
+
+def traduzir_arquivo_ass(arquivo_entrada: str, arquivo_saida: str, idioma_destino: str) -> bool:
+    """Traduz um arquivo ASS/SSA e salva em `arquivo_saida` (normalmente `.ass`).
+
+    Preserva cabeçalho/estilos do arquivo. Traduz apenas linhas ``Dialogue`` (não ``Comment``).
+    Ignora linhas de desenho (drawings). Tags inline complexas podem ser simplificadas; tags
+    no início de cada segmento (entre ``\\N``) são preservadas quando possível.
+    """
+    if pysubs2 is None:
+        print("Erro: tradução ASS requer pysubs2. Execute: pip install pysubs2")
+        return False
+    if requests is None:
+        print("Tradução requer: pip install requests")
+        return False
+    backend = str(_config("TRADUCAO_BACKEND", "libretranslate")).lower().strip()
+    if backend == "none":
+        return False
+
+    try:
+        subs = pysubs2.load(arquivo_entrada, encoding="utf-8-sig")
+    except Exception as e:
+        print(f"Erro ao carregar ASS/SSA: {e}")
+        return False
+
+    # ei -> lista de dicionários por segmento (separados por \\N)
+    work: Dict[int, List[Dict[str, str]]] = {}
+    for ei, ev in enumerate(subs.events):
+        if ev.is_comment:
+            continue
+        if ev.is_drawing:
+            continue
+        if not (ev.text or "").strip():
+            continue
+        parts = ev.text.split("\\N")
+        segs: List[Dict[str, str]] = []
+        for part in parts:
+            lead, rest = _ass_leading_tags(part)
+            plain = _ass_plain_segment(rest).strip()
+            segs.append({"lead": lead, "rest": rest, "plain": plain})
+        work[ei] = segs
+
+    flat: List[str] = []
+    flat_refs: List[Tuple[int, int]] = []
+    for ei, segs in work.items():
+        for si, seg in enumerate(segs):
+            if seg["plain"]:
+                flat.append(seg["plain"])
+                flat_refs.append((ei, si))
+
+    if not flat:
+        print("Nada para traduzir (sem texto legível em linhas Dialogue).")
+        return False
+
+    session = requests.Session()
+    GOOGLE_BATCH = 50
+    translated: List[str] = []
+
+    if backend == "google":
+        api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY") or _config("GOOGLE_TRANSLATE_API_KEY", None)
+        if not api_key:
+            print("Erro: defina GOOGLE_TRANSLATE_API_KEY no ambiente ou em config.py para usar Google Translate.")
+            return False
+        i = 0
+        while i < len(flat):
+            batch_blocks: List[str] = []
+            while i < len(flat) and len(batch_blocks) < GOOGLE_BATCH:
+                batch_blocks.append(flat[i])
+                i += 1
+            if not batch_blocks:
+                continue
+            try:
+                trad_list = _traduzir_lote_google(batch_blocks, idioma_destino, api_key, session)
+                if len(trad_list) == len(batch_blocks):
+                    translated.extend(trad_list)
+                else:
+                    print("Aviso: lote Google retornou tamanho inesperado; mantendo originais neste lote.")
+                    translated.extend(batch_blocks)
+            except Exception as e:
+                print(f"Erro Google Translate: {e}")
+                translated.extend(batch_blocks)
+    elif backend == "google_v1":
+        if GoogleTranslator is None:
+            print("Erro: google_v1 requer deep-translator. Execute: pip install deep-translator")
+            return False
+        for texto in flat:
+            if not texto.strip():
+                translated.append(texto)
+                continue
+            try:
+                translated.append(_traduzir_texto_google_v1(texto, idioma_destino) or texto)
+                time.sleep(0.2)
+            except Exception as e:
+                print(f"Erro Google V1: {e}")
+                translated.append(texto)
+    else:
+        for texto in flat:
+            if not texto.strip():
+                translated.append(texto)
+                continue
+            try:
+                translated.append(_traduzir_texto_libretranslate(texto, idioma_destino, session) or texto)
+            except Exception as e:
+                print(f"Erro tradução: {e}")
+                translated.append(texto)
+
+    if len(translated) != len(flat):
+        print("Erro: tradução ASS inconsistente (quantidade de linhas).")
+        return False
+
+    for idx, tr in enumerate(translated):
+        ei, si = flat_refs[idx]
+        seg = work[ei][si]
+        tr = (tr or seg["plain"]).replace("\r\n", "\n").replace("\r", "\n")
+        tr = tr.replace("\n", " ").strip()
+        if not tr:
+            tr = seg["plain"]
+        seg["translated"] = tr
+
+    for ei, segs in work.items():
+        out_parts: List[str] = []
+        for seg in segs:
+            plain = seg.get("plain") or ""
+            if not plain:
+                out_parts.append(seg["lead"] + seg["rest"])
+            else:
+                tr = seg.get("translated", plain)
+                out_parts.append(seg["lead"] + tr)
+        subs.events[ei].text = "\\N".join(out_parts)
+
+    try:
+        subs.save(arquivo_saida, encoding="utf-8", format_="ass")
+    except Exception as e:
+        print(f"Erro ao salvar ASS: {e}")
+        return False
+    return True
+
+
 class MKVExtractor:
     """Extrai faixas de legenda de MKV usando mkvtoolnix.
 
-    Tradução de SRT é opcional (dependendo de `TRADUCAO_BACKEND`).
+    Tradução de SRT e ASS/SSA é opcional (dependendo de `TRADUCAO_BACKEND`).
     """
 
     def __init__(self):
@@ -438,17 +604,23 @@ class MKVExtractor:
         pt_srt_legado = diretorio / f"{base}_PT.srt"
         if pt_srt_legado.exists():
             return True
+        pt_ass_legado = diretorio / f"{base}_PT.ass"
+        if pt_ass_legado.exists():
+            return True
 
         if backend != "none":
             try:
                 for p in diretorio.iterdir():
                     if not p.is_file():
                         continue
-                    if p.suffix.lower() != ".srt":
-                        continue
-                    # Ex.: Bluey.S01E51..._faixa2_PT.srt
-                    if p.name.startswith(base + "_faixa") and p.name.endswith("_PT.srt"):
-                        return True
+                    suf = p.suffix.lower()
+                    if suf == ".srt":
+                        # Ex.: Bluey.S01E51..._faixa2_PT.srt
+                        if p.name.startswith(base + "_faixa") and p.name.endswith("_PT.srt"):
+                            return True
+                    elif suf == ".ass":
+                        if p.name.startswith(base + "_faixa") and p.name.endswith("_PT.ass"):
+                            return True
             except Exception:
                 # Se falhar a varredura, cai no retorno padrão (False).
                 pass
@@ -560,6 +732,30 @@ class MKVExtractor:
                 return None
             run_opts = str(_config("SECONV_DOCKER_RUN_OPTS", "")).strip()
             docker_run_parts = shlex.split(run_opts) if run_opts else []
+
+            # Evita que os arquivos gerados em /subtitles fiquem como "root:root".
+            # O seconv dentro do container tende a rodar como root por padrão; ao escrever
+            # no volume montado, isso acaba refletindo como ownership/permissões restritas.
+            try:
+                uid = os.getuid()
+                gid = os.getgid()
+            except AttributeError:
+                uid = None
+                gid = None
+
+            has_user_flag = any(
+                p in ("--user", "-u") or p.startswith("--user=") or p.startswith("-u=")
+                for p in docker_run_parts
+            )
+            if uid is not None and gid is not None and not has_user_flag:
+                docker_run_parts = ["--user", f"{uid}:{gid}", *docker_run_parts]
+
+            has_workdir_flag = any(
+                p in ("--workdir", "-w") or p.startswith("--workdir=") or p.startswith("-w=")
+                for p in docker_run_parts
+            )
+            if not has_workdir_flag:
+                docker_run_parts = ["-w", "/subtitles", *docker_run_parts]
 
             # Monta o diretório do arquivo em /subtitles (conforme README do seconv).
             # Passamos apenas o basename para dentro do container.
@@ -728,6 +924,13 @@ class MKVExtractor:
         """
         return arquivo_srt.parent / f"{arquivo_srt.stem}_PT.srt"
 
+    def _pt_ass_destino_para_legenda_extraida(self, arquivo: Path) -> Path:
+        """
+        Destino PT para ASS/SSA extraído (sempre `.ass`).
+        Ex.: `Filme_faixa3.ass` ou `Filme_faixa3.ssa` -> `Filme_faixa3_PT.ass`.
+        """
+        return arquivo.parent / f"{arquivo.stem}_PT.ass"
+
     def traduzir_srt_extraido(self, arquivo_srt: str) -> bool:
         """
         Traduz um SRT extraído (gerado a partir do MKV) para o arquivo *_PT.srt.
@@ -797,6 +1000,49 @@ class MKVExtractor:
             print(f"Erro ao traduzir SRT: {e}")
             return False
 
+    def traduzir_ass_extraido(self, arquivo_ass: str) -> bool:
+        """
+        Traduz um ASS/SSA extraído do MKV para `*_PT.ass`.
+        """
+        src = Path(arquivo_ass)
+        if not src.is_file():
+            return False
+        if src.stem.endswith("_PT") or "_PT.ass" in src.name:
+            return False
+        if src.suffix.lower() not in (".ass", ".ssa"):
+            return False
+
+        def _looks_like_ass(path_base: Path) -> bool:
+            try:
+                if not path_base.exists() or not path_base.is_file():
+                    return False
+                with open(path_base, "r", encoding="utf-8-sig", errors="ignore") as f:
+                    head = f.read(4000)
+                return ("[Script Info]" in head or "[V4+ Styles]" in head or "[Events]" in head) and (
+                    "Dialogue:" in head or "dialogue:" in head.lower()
+                )
+            except Exception:
+                return False
+
+        if not _looks_like_ass(src):
+            return False
+
+        idioma = _config("IDIOMA_DESTINO", "pt")
+        backend = str(_config("TRADUCAO_BACKEND", "libretranslate")).lower().strip()
+        if backend == "none":
+            return False
+
+        destino = self._pt_ass_destino_para_legenda_extraida(src)
+        if destino.exists():
+            return True
+
+        print(f"Traduzindo ASS/SSA extraído: {src} -> {destino}")
+        try:
+            return bool(traduzir_arquivo_ass(str(src), str(destino), idioma))
+        except Exception as e:
+            print(f"Erro ao traduzir ASS: {e}")
+            return False
+
     def processar_mkv(
         self,
         arquivo_mkv: str,
@@ -851,6 +1097,15 @@ class MKVExtractor:
             if path_extraido.lower().endswith(".srt"):
                 print(f"Traduzindo faixa {num}...")
                 if self.traduzir_srt_extraido(path_extraido):
+                    print(f"Legenda traduzida (faixa {num}).")
+                else:
+                    print(f"Falha na tradução da faixa {num}.")
+                continue
+
+            # Caso 1b: legenda textual ASS/SSA.
+            if path_extraido.lower().endswith((".ass", ".ssa")):
+                print(f"Traduzindo faixa {num} (ASS/SSA)...")
+                if self.traduzir_ass_extraido(path_extraido):
                     print(f"Legenda traduzida (faixa {num}).")
                 else:
                     print(f"Falha na tradução da faixa {num}.")
@@ -942,11 +1197,13 @@ def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -
     """Monitora pastas e traduz automaticamente legendas.
 
     Regra 1: ao detectar um novo `.mkv`, executa a extração e (se habilitado)
-    traduz o SRT gerado.
+    traduz a legenda gerada (SRT ou ASS/SSA).
 
     Regra 2: se um `.srt` extraído (padrão `*_faixaN.srt`) surgir, traduz esse
     SRT para `*_PT.srt` automaticamente (caso já tenha sido extraído por outro
     processo).
+
+    Regra 3: idem para `*_faixaN.ass` / `.ssa` → `*_PT.ass`.
     """
     try:
         from watchdog.observers import Observer
@@ -1007,6 +1264,21 @@ def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -
                     return True
             return False
 
+        def _provavel_ass_extraido(self, p: str) -> bool:
+            """`.ass`/`.ssa` no padrão `*_faixaN.*` com MKV correspondente no mesmo diretório."""
+            src = Path(p)
+            if not src.is_file():
+                return False
+            if "_PT" in src.name:
+                return False
+            if src.suffix.lower() not in (".ass", ".ssa"):
+                return False
+            mkv_stem = src.stem
+            m = re.match(r"^(.*)_faixa\d+$", src.stem)
+            if m:
+                mkv_stem = m.group(1)
+            return (src.parent / f"{mkv_stem}.mkv").exists()
+
         def on_created(self, event):
             if event.is_directory:
                 return
@@ -1017,6 +1289,9 @@ def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -
                 return
             if self._provavel_srt_extraido(p):
                 fila.put(("srt", p))
+                return
+            if self._provavel_ass_extraido(p):
+                fila.put(("ass", p))
 
         def on_moved(self, event):
             if event.is_directory:
@@ -1028,6 +1303,9 @@ def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -
                 return
             if self._provavel_srt_extraido(p):
                 fila.put(("srt", p))
+                return
+            if self._provavel_ass_extraido(p):
+                fila.put(("ass", p))
 
     def worker():
         while True:
@@ -1055,6 +1333,11 @@ def run_watcher(extractor: MKVExtractor, pastas: List[str], atraso_seg: float) -
                         extractor.traduzir_srt_extraido(path)
                     except Exception as e:
                         print(f"Erro ao traduzir SRT {path}: {e}")
+                elif kind == "ass":
+                    try:
+                        extractor.traduzir_ass_extraido(path)
+                    except Exception as e:
+                        print(f"Erro ao traduzir ASS {path}: {e}")
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()
@@ -1122,7 +1405,12 @@ def main() -> None:
         description="Extrai legendas de MKV e opcionalmente traduz em Python (Google Translate API ou LibreTranslate)."
     )
     parser.add_argument("--arquivo", "-a", help="Processar um arquivo MKV")
-    parser.add_argument("--traduzir-srt", "-t", metavar="ARQUIVO", help="Só traduzir um arquivo SRT existente (salva como <nome>_PT.srt)")
+    parser.add_argument(
+        "--traduzir-srt",
+        "-t",
+        metavar="ARQUIVO",
+        help="Só traduzir um arquivo de legenda existente: .srt → <nome>_PT.srt; .ass/.ssa → <nome>_PT.ass",
+    )
     parser.add_argument("--lote", "-l", action="store_true", help="Processar pastas em lote")
     parser.add_argument("--watch", "-w", action="store_true", help="Watcher nas pastas")
     parser.add_argument("--pastas", "-p", nargs="+", default=None, help="Pastas para lote/watch")
@@ -1130,21 +1418,30 @@ def main() -> None:
 
     pastas = args.pastas or _config("PASTAS", PASTAS_PADRAO)
 
-    # Modo: traduzir SRT já existente (não depende de MKVToolNix)
+    # Modo: traduzir legenda já existente (não depende de MKVToolNix)
     if args.traduzir_srt:
         arquivo_entrada = os.path.abspath(args.traduzir_srt)
         if not os.path.isfile(arquivo_entrada):
             print(f"Arquivo não encontrado: {arquivo_entrada}")
             return
-        # Aceita também SRT sem extensão (ex: o mkvextract pode gerar `...WEBRip`).
 
         idioma = _config("IDIOMA_DESTINO", "pt")
         p_entrada = Path(arquivo_entrada)
+        suf = p_entrada.suffix.lower()
+
+        if suf in (".ass", ".ssa"):
+            arquivo_saida = str(p_entrada.parent / f"{p_entrada.stem}_PT.ass")
+            print("Traduzindo ASS/SSA...")
+            if traduzir_arquivo_ass(arquivo_entrada, arquivo_saida, idioma):
+                print(f"Legenda traduzida: {arquivo_saida}")
+            else:
+                print("Falha na tradução. Verifique TRADUCAO_BACKEND, pysubs2 (pip install pysubs2) e o provedor.")
+            return
+
+        # SRT (aceita também SRT sem extensão: ex. mkvextract gera `...WEBRip`).
         if p_entrada.name.lower().endswith(".srt"):
             base_nome = p_entrada.stem
         else:
-            # Não usar `.stem`, pois `Path` trata o texto após o último ponto como "extensão"
-            # (ex: `...WEBRip` viraria `...`).
             base_nome = p_entrada.name
         arquivo_saida = str(p_entrada.parent / f"{base_nome}_PT.srt")
 

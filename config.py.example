@@ -19,6 +19,8 @@ WATCHER_ESTABILIDADE_SEGUNDOS = 5
 # "google_v1" = Google Translate sem API key (como SubtitleEdit V1; requer deep-translator)
 # "google" = Google Translate API v2 (define `GOOGLE_TRANSLATE_API_KEY` no ambiente)
 # "libretranslate" = API gratuita (sem chave) | "none" = não traduzir
+#
+# Legendas ASS/SSA (.ass/.ssa): requer o pacote `pysubs2` (veja requirements.txt).
 TRADUCAO_BACKEND = "google_v1"
 
 # URL da API LibreTranslate (pública)
