@@ -4,7 +4,7 @@ Extrai faixas de legenda de arquivos MKV para SRT, ASS ou SUP. A **tradução** 
 
 ## Fluxo
 
-1. **Este script** — extrai **todas as faixas de legenda** do MKV para arquivos (`.srt`, `.ass` ou `.sup`). Se a legenda for **texto** (SRT) e a tradução estiver ativa em `config.py`, o script **traduz em Python** e gera `*_PT.srt` por faixa.
+1. **Este script** — extrai **todas as faixas de legenda** do MKV para arquivos (`.srt`, `.ass` ou `.sup`). Se a legenda for **texto** (SRT ou ASS/SSA) e a tradução estiver ativa em `config.py`, o script **traduz em Python** e gera `*_PT.srt` ou `*_PT.ass` por faixa (ASS/SSA requer `pysubs2`; veja `requirements.txt`).
 2. **SubtitleEdit** (opcional) — para legendas em **imagem** (PGS/SUP): abra o MKV ou o `.sup` e use **Ferramentas > OCR**. Para traduzir manualmente em vez do script: **Ferramentas > Auto-traduzir** (Google Translate).
 
 ## Pré-requisitos
@@ -16,7 +16,7 @@ Extrai faixas de legenda de arquivos MKV para SRT, ASS ou SUP. A **tradução** 
 
 - **SubtitleEdit** — para OCR e tradução (instale separadamente).
 
-- **Python 3** — para o script de extração. Watcher opcional requer: `pip install watchdog`.
+- **Python 3** — para o script de extração. Instale dependências: `pip install -r requirements.txt` (inclui `watchdog` para o watcher e `pysubs2` para traduzir ASS/SSA).
 
 ## Configuração
 
@@ -45,8 +45,9 @@ Opções: processar um arquivo, processar pastas em lote, processar uma pasta (s
 # Processar um MKV (extrai todas as faixas de legenda)
 python extrair_legendas.py --arquivo /caminho/filme.mkv
 
-# Traduzir um SRT já existente (gerado pelo SubtitleEdit)
+# Traduzir um SRT ou ASS/SSA já existente (gera <nome>_PT.srt ou <nome>_PT.ass)
 python extrair_legendas.py --traduzir-srt /caminho/legenda.srt
+python extrair_legendas.py --traduzir-srt /caminho/legenda.ass
 
 # Processar em lote todas as pastas do config
 python extrair_legendas.py --lote
@@ -63,7 +64,7 @@ python extrair_legendas.py --pastas /path/torrents /path/series --lote
 Para cada MKV processado são gerados, no mesmo diretório:
 
 - `nome_do_arquivo_faixaN.srt` (ou `.ass` / `.sup`, conforme o codec), para cada faixa detectada.
-- Se a tradução estiver ativa (`TRADUCAO_BACKEND` diferente de `"none"`) e a legenda for SRT: também `nome_do_arquivo_faixaN_PT.srt`.
+- Se a tradução estiver ativa (`TRADUCAO_BACKEND` diferente de `"none"`): também `nome_do_arquivo_faixaN_PT.srt` (SRT) ou `nome_do_arquivo_faixaN_PT.ass` (ASS/SSA).
 
 ## Arquivos de instrução do projeto
 
