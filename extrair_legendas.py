@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Extrai legendas de arquivos MKV para SRT/ASS/SUP usando mkvtoolnix.
-Opcionalmente traduz o SRT em Python (Google Translate V1/V2 ou LibreTranslate).
+Opcionalmente traduz o SRT em Python (LibreTranslate).
 Legendas em imagem (PGS/SUP): use SubtitleEdit para OCR, ou extraia e traduza só se já for texto.
 """
 
@@ -23,11 +23,6 @@ except ImportError:
     requests = None
 
 try:
-    from deep_translator import GoogleTranslator
-except ImportError:
-    GoogleTranslator = None
-
-try:
     import config
 except ImportError:
     config = None
@@ -45,6 +40,21 @@ WATCHER_ESTABILIDADE_PADRAO = 5
 
 
 def _config(key: str, default):
+    # Override por variáveis de ambiente (por job, especialmente via Celery).
+    env_val = os.environ.get(key)
+    if env_val is not None:
+        try:
+            if isinstance(default, bool):
+                return env_val.strip().lower() in ("1", "true", "yes", "sim", "on")
+            if isinstance(default, int):
+                return int(env_val)
+            if isinstance(default, float):
+                return float(env_val)
+        except Exception:
+            # Em caso de falha de conversão, mantém como string.
+            pass
+        return env_val
+
     if config is None:
         return default
     return getattr(config, key, default)
@@ -89,47 +99,6 @@ def _traduzir_texto_libretranslate(texto: str, idioma_destino: str, session: req
     out = j.get("translatedText") or j.get("translation") or j.get("translated_text") or texto
     return str(out).strip() or texto
 
-
-def _traduzir_texto_google(texto: str, idioma_destino: str, api_key: str, session: requests.Session) -> str:
-    """Traduz um texto via Google Cloud Translation API v2 (REST)."""
-    url = "https://translation.googleapis.com/language/translate/v2"
-    params = {"q": texto, "target": idioma_destino, "source": "auto", "key": api_key}
-    r = session.post(url, data=params, timeout=30)
-    r.raise_for_status()
-    j = r.json()
-    try:
-        return (j.get("data") or {}).get("translations", [{}])[0].get("translatedText", texto) or texto
-    except (IndexError, KeyError, TypeError):
-        return texto
-
-
-def _traduzir_lote_google(textos: List[str], idioma_destino: str, api_key: str, session: requests.Session) -> List[str]:
-    """Traduz uma lista de textos em uma chamada (API v2 aceita múltiplos q). Retorna lista na mesma ordem."""
-    if not textos:
-        return []
-    url = "https://translation.googleapis.com/language/translate/v2"
-    data = [("target", idioma_destino), ("source", "auto"), ("key", api_key)]
-    for t in textos:
-        data.append(("q", t))
-    r = session.post(url, data=data, timeout=60)
-    r.raise_for_status()
-    j = r.json()
-    out = []
-    for tr in (j.get("data") or {}).get("translations", []):
-        out.append(tr.get("translatedText", "") or "")
-    return out if len(out) == len(textos) else [textos[i] if i < len(textos) else "" for i in range(len(textos))]
-
-
-def _traduzir_texto_google_v1(texto: str, idioma_destino: str) -> str:
-    """Traduz um texto via Google Translate sem API key (deep-translator; como SubtitleEdit V1)."""
-    if GoogleTranslator is None:
-        raise RuntimeError("deep-translator não instalado. Execute: pip install deep-translator")
-    try:
-        return GoogleTranslator(source="auto", target=idioma_destino).translate(text=texto) or texto
-    except Exception:
-        return texto
-
-
 def traduzir_arquivo_srt(arquivo_entrada: str, arquivo_saida: str, idioma_destino: str) -> bool:
     """Traduz um arquivo SRT e salva em arquivo_saida. Retorna True se ok."""
     if requests is None:
@@ -138,69 +107,27 @@ def traduzir_arquivo_srt(arquivo_entrada: str, arquivo_saida: str, idioma_destin
     backend = str(_config("TRADUCAO_BACKEND", "libretranslate")).lower().strip()
     if backend == "none":
         return False
+    if backend != "libretranslate":
+        print(f"Aviso: TRADUCAO_BACKEND '{backend}' não suportado; usando libretranslate.")
+    backend = "libretranslate"
     blocos = _parse_srt_blocks(arquivo_entrada)
     if not blocos:
         return False
     session = requests.Session()
-    GOOGLE_BATCH = 50
 
     with open(arquivo_saida, "w", encoding="utf-8") as f:
-        if backend == "google":
-            api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY") or _config("GOOGLE_TRANSLATE_API_KEY", None)
-            if not api_key:
-                print("Erro: defina GOOGLE_TRANSLATE_API_KEY no ambiente ou em config.py para usar Google Translate.")
-                return False
-            i = 0
-            while i < len(blocos):
-                batch_blocks = []
-                batch_texts = []
-                while i < len(blocos) and len(batch_blocks) < GOOGLE_BATCH:
-                    num, ts, texto = blocos[i]
-                    if not texto.strip():
-                        f.write(f"{num}\n{ts}\n\n\n")
-                        i += 1
-                        continue
-                    batch_blocks.append((num, ts, texto))
-                    batch_texts.append(texto)
-                    i += 1
-                if batch_blocks:
-                    try:
-                        trad_list = _traduzir_lote_google(batch_texts, idioma_destino, api_key, session)
-                        for (num, ts, texto), trad in zip(batch_blocks, trad_list):
-                            f.write(f"{num}\n{ts}\n{trad or texto}\n\n")
-                    except Exception as e:
-                        print(f"Erro Google Translate: {e}")
-                        for (num, ts, texto) in batch_blocks:
-                            f.write(f"{num}\n{ts}\n{texto}\n\n")
-        elif backend == "google_v1":
-            if GoogleTranslator is None:
-                print("Erro: google_v1 requer deep-translator. Execute: pip install deep-translator")
-                return False
-            for num, ts, texto in blocos:
-                f.write(f"{num}\n{ts}\n")
-                if texto.strip():
-                    try:
-                        trad = _traduzir_texto_google_v1(texto, idioma_destino)
-                        f.write(trad + "\n\n")
-                        time.sleep(0.2)
-                    except Exception as e:
-                        print(f"Erro Google V1: {e}")
-                        f.write(texto + "\n\n")
-                else:
-                    f.write("\n")
-        else:
-            # LibreTranslate: um bloco por vez
-            for num, ts, texto in blocos:
-                f.write(f"{num}\n{ts}\n")
-                if texto.strip():
-                    try:
-                        trad = _traduzir_texto_libretranslate(texto, idioma_destino, session)
-                        f.write(trad + "\n\n")
-                    except Exception as e:
-                        print(f"Erro tradução: {e}")
-                        f.write(texto + "\n\n")
-                else:
-                    f.write("\n")
+        # LibreTranslate: um bloco por vez
+        for num, ts, texto in blocos:
+            f.write(f"{num}\n{ts}\n")
+            if texto.strip():
+                try:
+                    trad = _traduzir_texto_libretranslate(texto, idioma_destino, session)
+                    f.write(trad + "\n\n")
+                except Exception as e:
+                    print(f"Erro tradução: {e}")
+                    f.write(texto + "\n\n")
+            else:
+                f.write("\n")
     return True
 
 
@@ -245,6 +172,9 @@ def traduzir_arquivo_ass(arquivo_entrada: str, arquivo_saida: str, idioma_destin
     backend = str(_config("TRADUCAO_BACKEND", "libretranslate")).lower().strip()
     if backend == "none":
         return False
+    if backend != "libretranslate":
+        print(f"Aviso: TRADUCAO_BACKEND '{backend}' não suportado; usando libretranslate.")
+    backend = "libretranslate"
 
     try:
         subs = pysubs2.load(arquivo_entrada, encoding="utf-8-sig")
@@ -282,56 +212,17 @@ def traduzir_arquivo_ass(arquivo_entrada: str, arquivo_saida: str, idioma_destin
         return False
 
     session = requests.Session()
-    GOOGLE_BATCH = 50
     translated: List[str] = []
 
-    if backend == "google":
-        api_key = os.environ.get("GOOGLE_TRANSLATE_API_KEY") or _config("GOOGLE_TRANSLATE_API_KEY", None)
-        if not api_key:
-            print("Erro: defina GOOGLE_TRANSLATE_API_KEY no ambiente ou em config.py para usar Google Translate.")
-            return False
-        i = 0
-        while i < len(flat):
-            batch_blocks: List[str] = []
-            while i < len(flat) and len(batch_blocks) < GOOGLE_BATCH:
-                batch_blocks.append(flat[i])
-                i += 1
-            if not batch_blocks:
-                continue
-            try:
-                trad_list = _traduzir_lote_google(batch_blocks, idioma_destino, api_key, session)
-                if len(trad_list) == len(batch_blocks):
-                    translated.extend(trad_list)
-                else:
-                    print("Aviso: lote Google retornou tamanho inesperado; mantendo originais neste lote.")
-                    translated.extend(batch_blocks)
-            except Exception as e:
-                print(f"Erro Google Translate: {e}")
-                translated.extend(batch_blocks)
-    elif backend == "google_v1":
-        if GoogleTranslator is None:
-            print("Erro: google_v1 requer deep-translator. Execute: pip install deep-translator")
-            return False
-        for texto in flat:
-            if not texto.strip():
-                translated.append(texto)
-                continue
-            try:
-                translated.append(_traduzir_texto_google_v1(texto, idioma_destino) or texto)
-                time.sleep(0.2)
-            except Exception as e:
-                print(f"Erro Google V1: {e}")
-                translated.append(texto)
-    else:
-        for texto in flat:
-            if not texto.strip():
-                translated.append(texto)
-                continue
-            try:
-                translated.append(_traduzir_texto_libretranslate(texto, idioma_destino, session) or texto)
-            except Exception as e:
-                print(f"Erro tradução: {e}")
-                translated.append(texto)
+    for texto in flat:
+        if not texto.strip():
+            translated.append(texto)
+            continue
+        try:
+            translated.append(_traduzir_texto_libretranslate(texto, idioma_destino, session) or texto)
+        except Exception as e:
+            print(f"Erro tradução: {e}")
+            translated.append(texto)
 
     if len(translated) != len(flat):
         print("Erro: tradução ASS inconsistente (quantidade de linhas).")
@@ -1139,7 +1030,7 @@ class MKVExtractor:
                 continue
 
         if backend == "none" and algum_sucesso:
-            print("Próximo passo: abra no SubtitleEdit → Ferramentas → Auto-traduzir (Google Translate) → salve como *_PT.srt")
+            print("Próximo passo: abra no SubtitleEdit → Ferramentas → Auto-traduzir → salve como *_PT.srt")
         return algum_sucesso
 
     def processar_lote(self, pastas: Optional[List[str]] = None) -> None:
@@ -1402,7 +1293,7 @@ def main_interativo() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extrai legendas de MKV e opcionalmente traduz em Python (Google Translate API ou LibreTranslate)."
+        description="Extrai legendas de MKV e opcionalmente traduz em Python (LibreTranslate)."
     )
     parser.add_argument("--arquivo", "-a", help="Processar um arquivo MKV")
     parser.add_argument(

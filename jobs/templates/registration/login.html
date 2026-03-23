@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Login</title>
+    <style>
+      body { font-family: sans-serif; margin: 2rem; }
+      .container { max-width: 520px; margin: 0 auto; }
+      label { display: block; margin-top: 1rem; }
+      input { width: 100%; padding: 0.6rem; }
+      button { margin-top: 1.2rem; padding: 0.6rem 1rem; cursor: pointer; }
+      .error { color: #b00020; margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Login</h2>
+
+      {% if form.errors %}
+        <div class="error">
+          Usuário ou senha inválidos.
+        </div>
+      {% endif %}
+
+      <form method="post">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+
+        <label for="id_username">Usuário</label>
+        {{ form.username }}
+
+        <label for="id_password">Senha</label>
+        {{ form.password }}
+
+        <button type="submit">Entrar</button>
+      </form>
+    </div>
+  </body>
+</html>
+

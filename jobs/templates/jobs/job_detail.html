@@ -1,0 +1,52 @@
+{% extends "jobs/base.html" %}
+
+{% block content %}
+  <h2>Detalhe do Job</h2>
+
+  <div class="card">
+    <div><strong>ID:</strong> {{ job.id }}</div>
+    <div><strong>Status:</strong> {{ job.status }}</div>
+    <div><strong>Arquivo (MKV):</strong> <span class="muted">{{ job.mkv_path }}</span></div>
+    <div><strong>Track:</strong> <span class="muted">{{ job.track_number|default:"-" }}</span></div>
+    <div><strong>Idioma destino:</strong> {{ job.idioma_destino }}</div>
+    <div><strong>Backend:</strong> {{ job.translation_backend }}</div>
+    <div><strong>Erro:</strong></div>
+    {% if job.error_message %}
+      <div class="muted">{{ job.error_message }}</div>
+    {% else %}
+      <div class="muted">-</div>
+    {% endif %}
+  </div>
+
+  <h3>Log</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Quando</th>
+        <th>Nível</th>
+        <th>Mensagem</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+        <tr>
+          <td class="muted">{{ log.created_at }}</td>
+          <td class="muted">{{ log.level }}</td>
+          <td>{{ log.message }}</td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="3" class="muted">Sem logs ainda.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>result_files</h3>
+  <pre>{{ result_files_pretty }}</pre>
+
+  <div class="muted" style="margin-top:1.5rem;">
+    Dica: recarregue a página para ver atualizações de status/log.
+  </div>
+{% endblock %}
+

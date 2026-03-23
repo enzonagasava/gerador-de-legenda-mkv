@@ -1,7 +1,52 @@
-# Arquivo de configuração local (não versionar)
+# ----------------------------
+# Segredos / configuração local
+# ----------------------------
 config.py
+.env
+.env.*
+*.env
 
-# Cache Python (opcional, mas comum)
+# ----------------------------
+# Ambiente local Python
+# ----------------------------
+.venv/
+venv/
+env/
+
+# ----------------------------
+# Banco local Django
+# ----------------------------
+db.sqlite3
+db.sqlite3-*
+
+# ----------------------------
+# Cache / artefatos Python
+# ----------------------------
 __pycache__/
+*.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# ----------------------------
+# Logs / temporários
+# ----------------------------
+*.log
+logs/
+*.pid
+*.tmp
+*.swp
+
+# ----------------------------
+# Build / empacotamento
+# ----------------------------
+build/
+dist/
+.eggs/
+*.egg-info/
 
