@@ -1,0 +1,20 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: tradutor_legendas
+      POSTGRES_USER: tradutor_legendas
+      POSTGRES_PASSWORD: tradutor_legendas
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+

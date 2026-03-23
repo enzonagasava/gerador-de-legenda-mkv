@@ -1,0 +1,47 @@
+{% extends "jobs/base.html" %}
+
+{% block content %}
+  <h2>Criar Job</h2>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <div>
+      <label for="{{ form.mkv_path.id_for_label }}">{{ form.mkv_path.label }}</label>
+      {{ form.mkv_path }}
+      {% if form.mkv_path.help_text %}
+        <div class="muted">{{ form.mkv_path.help_text }}</div>
+      {% endif %}
+      {% for err in form.mkv_path.errors %}
+        <div class="error" style="color:#b00020">{{ err }}</div>
+      {% endfor %}
+    </div>
+
+    <div>
+      <label for="{{ form.track_number.id_for_label }}">{{ form.track_number.label }}</label>
+      {{ form.track_number }}
+      {% for err in form.track_number.errors %}
+        <div class="error" style="color:#b00020">{{ err }}</div>
+      {% endfor %}
+    </div>
+
+    <div>
+      <label for="{{ form.idioma_destino.id_for_label }}">{{ form.idioma_destino.label }}</label>
+      {{ form.idioma_destino }}
+      {% for err in form.idioma_destino.errors %}
+        <div class="error" style="color:#b00020">{{ err }}</div>
+      {% endfor %}
+    </div>
+
+    <div>
+      <label for="{{ form.translation_backend.id_for_label }}">{{ form.translation_backend.label }}</label>
+      {{ form.translation_backend }}
+      {% for err in form.translation_backend.errors %}
+        <div class="error" style="color:#b00020">{{ err }}</div>
+      {% endfor %}
+    </div>
+
+    <button type="submit" style="margin-top:1.2rem;">Disparar processamento</button>
+  </form>
+{% endblock %}
+
