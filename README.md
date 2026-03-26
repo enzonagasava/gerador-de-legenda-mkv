@@ -27,6 +27,7 @@ Edite `config.py`:
 - **TRADUCAO_BACKEND** — `"libretranslate"` (grátis, sem chave; padrão) ou `"none"` (só extrai; traduza no SubtitleEdit).
 - **LIBRETRANSLATE_URL** — URL da API LibreTranslate.
 - **WATCHER_ESTABILIDADE_SEGUNDOS** — tempo de espera após detectar novo MKV antes de extrair (evitar arquivo em download).
+- **EMBUTIR_SRT_NO_MKV** — se `True`, ao final gera um novo MKV com `*_PT.srt` embutido (ver `docs/embutir-legenda-no-mkv.md`).
 
 ### LibreTranslate local via Docker (estrutura física em `docker/`)
 

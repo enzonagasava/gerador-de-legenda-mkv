@@ -1009,6 +1009,7 @@ class MKVExtractor:
                 return False
 
         algum_sucesso = False
+        srt_pt_gerados: List[str] = []
         for faixa in faixas_alvo:
             num = faixa["numero"]
             base_saida = str(base.parent / f"{base.stem}_faixa{num}")
@@ -1026,7 +1027,21 @@ class MKVExtractor:
             # Caso 1: legenda textual já em SRT.
             if path_extraido.lower().endswith(".srt"):
                 print(f"Traduzindo faixa {num}...")
+                # Mesmo que a tradução falhe ou já exista, tentamos detectar o destino PT.
+                try:
+                    destino_pt = self._pt_srt_destino_para_srt_extraido(Path(path_extraido))
+                    if destino_pt.is_file():
+                        srt_pt_gerados.append(str(destino_pt))
+                except Exception:
+                    destino_pt = None
+
                 if self.traduzir_srt_extraido(path_extraido):
+                    try:
+                        destino_pt = self._pt_srt_destino_para_srt_extraido(Path(path_extraido))
+                        if destino_pt.is_file():
+                            srt_pt_gerados.append(str(destino_pt))
+                    except Exception:
+                        pass
                     print(f"Legenda traduzida (faixa {num}).")
                 else:
                     print(f"Falha na tradução da faixa {num}.")
@@ -1062,13 +1077,108 @@ class MKVExtractor:
                 print(f"Traduzindo (após OCR) faixa {num}...")
                 if traduzir_arquivo_srt(srt_ocr, str(destino_pt), idioma):
                     print(f"Legenda traduzida (faixa {num}): {destino_pt}")
+                    if destino_pt.is_file():
+                        srt_pt_gerados.append(str(destino_pt))
                 else:
                     print(f"Falha na tradução da faixa {num} após OCR.")
+                    if destino_pt.is_file():
+                        srt_pt_gerados.append(str(destino_pt))
                 continue
+
+        # Ao final do MKV, opcionalmente embute as legendas PT geradas como novas faixas.
+        if algum_sucesso and srt_pt_gerados and str(_config("EMBUTIR_SRT_NO_MKV", False)).lower() in ("1", "true", "yes", "sim"):
+            try:
+                # Escolhe apenas o MAIOR SRT (normalmente evita incluir legenda curta de abertura).
+                unique: List[Path] = []
+                seen = set()
+                for p in srt_pt_gerados:
+                    try:
+                        sp = Path(p)
+                        if not sp.is_file():
+                            continue
+                        key = str(sp.resolve(strict=False))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        unique.append(sp)
+                    except Exception:
+                        continue
+
+                if unique:
+                    unique.sort(key=lambda x: x.stat().st_size if x.exists() else 0, reverse=True)
+                    srt_pt_gerados = [str(unique[0])]
+
+                out_suffix = str(_config("MKV_MUX_SUFFIX", "_COM_LEGENDA")).strip() or "_COM_LEGENDA"
+                set_default = str(_config("MKV_MUX_SET_DEFAULT", False)).lower() in ("1", "true", "yes", "sim", "on")
+                out_mkv_path = base.with_name(base.stem + out_suffix + base.suffix)
+                if out_mkv_path.exists():
+                    # Evita sobrescrever: cria sufixo incremental simples.
+                    i = 2
+                    while True:
+                        candidate = base.with_name(base.stem + out_suffix + f"_{i}" + base.suffix)
+                        if not candidate.exists():
+                            out_mkv_path = candidate
+                            break
+                        i += 1
+                self._mux_srt_no_mkv(
+                    arquivo_mkv,
+                    srt_pt_gerados,
+                    str(out_mkv_path),
+                    idioma_destino=idioma,
+                    set_default=set_default,
+                )
+            except Exception as e:
+                print(f"Aviso: falha ao embutir legendas no MKV: {e}")
 
         if backend == "none" and algum_sucesso:
             print("Próximo passo: abra no SubtitleEdit → Ferramentas → Auto-traduzir → salve como *_PT.srt")
         return algum_sucesso
+
+    def _mux_srt_no_mkv(
+        self,
+        mkv_path: str,
+        srt_paths: List[str],
+        out_mkv_path: str,
+        idioma_destino: str,
+        set_default: bool = False,
+    ) -> None:
+        mkv = Path(mkv_path)
+        out_mkv = Path(out_mkv_path)
+        if not mkv.is_file():
+            raise FileNotFoundError(f"MKV não encontrado: {mkv_path}")
+
+        srts = []
+        for p in srt_paths:
+            try:
+                sp = Path(p)
+                if sp.is_file():
+                    srts.append(sp)
+            except Exception:
+                continue
+        if not srts:
+            raise FileNotFoundError("Nenhum SRT PT encontrado para mux.")
+
+        lang = (idioma_destino or "").strip() or "pt-BR"
+        if lang.lower() in ("pt", "pt_br", "pt-br"):
+            lang = "pt-BR"
+
+        cmd: List[str] = ["mkvmerge", "-o", str(out_mkv), str(mkv)]
+        for srt in srts:
+            # opções aplicam ao próximo arquivo
+            cmd += [
+                "--language",
+                f"0:{lang}",
+                "--track-name",
+                "0:Português",
+                "--default-track",
+                f"0:{'yes' if set_default else 'no'}",
+                str(srt),
+            ]
+
+        print(f"[MUX] Criando MKV com legenda embutida: {out_mkv}")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        if r.returncode != 0:
+            raise RuntimeError(f"mkvmerge falhou: {r.stderr or r.stdout}")
 
     def processar_lote(self, pastas: Optional[List[str]] = None) -> None:
         """Varre pastas e extrai legenda de cada MKV que ainda não tem arquivo extraído."""
