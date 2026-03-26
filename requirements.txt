@@ -2,20 +2,10 @@
 requests>=2.28.0
 deep-translator>=1.11.0
 watchdog>=3.0.0
-# Django + API
-Django>=5.0,<6.0
-djangorestframework>=3.15
-
-# Autenticação token (DRF)
-# django-celery-results é opcional/recomendado, mas adiciona uma camada extra para resultados/estado
-django-celery-results>=2.5
-
-# Celery + broker (Redis)
-celery>=5.3
-redis>=5.0
-
-# Banco (PostgreSQL)
-psycopg[binary]>=3.1
 
 # Legendas ASS/SSA (tradução preservando cabeçalho/estilos)
 pysubs2>=1.6.0
+
+# Desktop executável
+PySide6>=6.8.0
+pyinstaller>=6.0.0
