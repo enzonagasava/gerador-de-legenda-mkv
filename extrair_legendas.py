@@ -8,6 +8,7 @@ Legendas em imagem (PGS/SUP): use SubtitleEdit para OCR, ou extraia e traduza s�
 import os
 import sys
 import re
+import shutil
 import subprocess
 import time
 import argparse
@@ -89,13 +90,26 @@ def _parse_srt_blocks(arquivo: str) -> List[Tuple[str, str, str]]:
 
 def _traduzir_texto_libretranslate(texto: str, idioma_destino: str, session: requests.Session) -> str:
     """Traduz um texto via LibreTranslate."""
-    url = _config("LIBRETRANSLATE_URL", "https://libretranslate.de/translate").rstrip("/")
+    url = _config("LIBRETRANSLATE_URL", "https://de.libretranslate.com/translate").rstrip("/")
     if not url.endswith("/translate"):
         url = f"{url}/translate" if "/translate" not in url else url
-    payload = {"q": texto, "source": "auto", "target": idioma_destino, "format": "text"}
+    target = (idioma_destino or "").strip()
+    # LibreTranslate/Argos costuma expor Português do Brasil como "pt-BR".
+    # Mantemos compatibilidade com config antigo ("pt").
+    if target.lower() in ("pt", "pt_br", "pt-br"):
+        target = "pt-BR"
+    payload = {"q": texto, "source": "auto", "target": target, "format": "text"}
     r = session.post(url, data=payload, timeout=30)
     r.raise_for_status()
-    j = r.json() if r.content else {}
+    if not r.content:
+        raise RuntimeError("Resposta vazia da API de tradução.")
+    try:
+        j = r.json()
+    except ValueError as exc:
+        sample = (r.text or "").strip().replace("\n", " ")[:180]
+        raise RuntimeError(
+            f"Resposta invalida da API (status {r.status_code}, content-type: {r.headers.get('content-type', '')}): {sample}"
+        ) from exc
     out = j.get("translatedText") or j.get("translation") or j.get("translated_text") or texto
     return str(out).strip() or texto
 
@@ -670,15 +684,40 @@ class MKVExtractor:
                 *seconv_actions,
             ]
         else:
-            # Modo local: assume que `seconv` está no PATH.
+            # Modo local: tenta localizar `seconv` no PATH e em caminhos comuns.
+            seconv_bin = shutil.which("seconv")
+            if not seconv_bin:
+                for candidate in (
+                    os.path.expanduser("~/.cargo/bin/seconv"),
+                    os.path.expanduser("~/.local/bin/seconv"),
+                ):
+                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                        seconv_bin = candidate
+                        break
+            if not seconv_bin:
+                print("Erro: seconv não encontrado no PATH. Instale o subtitleedit-cli localmente.")
+                return None
             ocr_db = str(_config("SECONV_OCR_DB", "Latin")).strip() or "Latin"
             seconv_actions = []
             if str(_config("SECONV_APPLY_MERGE_ACTIONS", True)).lower() in ("1", "true", "yes", "sim"):
                 seconv_actions = ["/MergeSameTimeCodes", "/MergeSameTexts"]
-            cmd = ["seconv", sup.name, out_format, f"/ocrdb:{ocr_db}", *seconv_actions]
+            cmd = [seconv_bin, sup.name, out_format, f"/ocrdb:{ocr_db}", *seconv_actions]
+            cpuset = str(_config("SECONV_CPUSET", "")).strip()
+            if cpuset:
+                taskset_bin = shutil.which("taskset")
+                if taskset_bin:
+                    cmd = [taskset_bin, "-c", cpuset, *cmd]
+                else:
+                    print("Aviso: SECONV_CPUSET definido, mas `taskset` não está disponível; ignorando limite de CPU.")
 
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+            print(f"[OCR] Executando seconv ({mode}) para: {sup.name}")
+            run_kwargs = {"capture_output": True, "text": True, "encoding": "utf-8"}
+            if mode == "local":
+                # Para o modo local, garante resolução correta do arquivo e saída ao lado do .sup.
+                r = subprocess.run(cmd, cwd=str(out_dir), **run_kwargs)
+            else:
+                r = subprocess.run(cmd, **run_kwargs)
             if r.returncode != 0:
                 print(f"Erro ao executar seconv: {r.stderr or r.stdout}")
                 return None
@@ -1005,11 +1044,9 @@ class MKVExtractor:
             # Caso 2: legenda em imagem (SUP): OCR + tradução.
             if path_extraido.lower().endswith(".sup"):
                 srt_ocr = self._ocr_sup_via_seconv(path_extraido)
-                if not srt_ocr or not os.path.isfile(srt_ocr):
-                    srt_ocr = self._ocr_sup_via_subtitleedit(path_extraido)
 
                 if not srt_ocr or not os.path.isfile(srt_ocr):
-                    print(f"Falha no OCR automático da faixa {num}. Abra o .sup no SubtitleEdit para OCR manual.")
+                    print(f"Falha no OCR automático da faixa {num}.")
                     continue
 
                 # O OCR já gerou (pelo menos) um .srt consolidado.

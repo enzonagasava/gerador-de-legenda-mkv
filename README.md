@@ -28,6 +28,34 @@ Edite `config.py`:
 - **LIBRETRANSLATE_URL** — URL da API LibreTranslate.
 - **WATCHER_ESTABILIDADE_SEGUNDOS** — tempo de espera após detectar novo MKV antes de extrair (evitar arquivo em download).
 
+### LibreTranslate local via Docker (estrutura física em `docker/`)
+
+Este projeto inclui configuração dedicada em `docker/libretranslate/`, no mesmo estilo do `subtitleedit-cli`.
+
+Build manual:
+
+```bash
+docker build -t libretranslate-local:1.0 -f docker/libretranslate/docker/Dockerfile .
+```
+
+Run manual:
+
+```bash
+docker run --rm -p 5000:5000 --name libretranslate-local libretranslate-local:1.0
+```
+
+Ou com compose:
+
+```bash
+docker compose up -d libretranslate
+```
+
+Com isso, use no `config.py`:
+
+```python
+LIBRETRANSLATE_URL = "http://localhost:5000/translate"
+```
+
 ## Uso
 
 ### Menu interativo
@@ -223,7 +251,7 @@ Fluxo:
 
 1. Acesse `http://localhost:8000/web/login/` e faça login.
 2. Vá em `http://localhost:8000/web/jobs/create/`.
-3. Informe `mkv_path` para um arquivo `.mkv` existente no servidor.
+3. Faça upload de um arquivo `.mkv` na página de criação de job.
 4. O job será enfileirado via Celery e o status/log aparece em `http://localhost:8000/web/jobs/<uuid>/`.
 
-Validação de segurança: o `mkv_path` precisa estar dentro de `MKV_ALLOWED_ROOTS` (ou dentro de `PASTAS` do seu `config.py`, se `MKV_ALLOWED_ROOTS` não estiver definido).
+Por padrão, os arquivos enviados pela UI web são salvos em `uploaded_mkvs/` na raiz do projeto (configurável por `MKV_UPLOAD_DIR`) e depois processados pelo worker.

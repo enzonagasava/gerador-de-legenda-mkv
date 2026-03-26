@@ -3,16 +3,16 @@
 {% block content %}
   <h2>Criar Job</h2>
 
-  <form method="post">
+  <form method="post" enctype="multipart/form-data">
     {% csrf_token %}
 
     <div>
-      <label for="{{ form.mkv_path.id_for_label }}">{{ form.mkv_path.label }}</label>
-      {{ form.mkv_path }}
-      {% if form.mkv_path.help_text %}
-        <div class="muted">{{ form.mkv_path.help_text }}</div>
+      <label for="{{ form.mkv_file.id_for_label }}">{{ form.mkv_file.label }}</label>
+      {{ form.mkv_file }}
+      {% if form.mkv_file.help_text %}
+        <div class="muted">{{ form.mkv_file.help_text }}</div>
       {% endif %}
-      {% for err in form.mkv_path.errors %}
+      {% for err in form.mkv_file.errors %}
         <div class="error" style="color:#b00020">{{ err }}</div>
       {% endfor %}
     </div>

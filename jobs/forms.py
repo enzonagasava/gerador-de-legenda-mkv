@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from django import forms
 
-from core.security import mkv_path_is_allowed
-
 from .models import Job
 
 
 class JobCreateForm(forms.Form):
-    mkv_path = forms.CharField(
-        label="Caminho do MKV",
-        help_text="Informe o caminho para um arquivo .mkv já existente no servidor.",
+    mkv_file = forms.FileField(
+        label="Arquivo MKV",
+        help_text="Envie um arquivo `.mkv` para processamento.",
     )
     track_number = forms.IntegerField(label="Track (opcional)", required=False, min_value=1)
     idioma_destino = forms.CharField(label="Idioma destino", required=False, max_length=16, initial="pt")
@@ -22,20 +20,10 @@ class JobCreateForm(forms.Form):
         required=False,
     )
 
-    def clean_mkv_path(self) -> str:
-        value = self.cleaned_data["mkv_path"].strip()
-        if not value.lower().endswith(".mkv"):
-            raise forms.ValidationError("`mkv_path` precisa apontar para um arquivo `.mkv`.")
-
-        # Usamos validação de existência + segurança contra path traversal.
-        import os
-
-        if not os.path.isfile(value):
-            raise forms.ValidationError("Arquivo não encontrado: verifique o caminho no servidor.")
-
-        if not mkv_path_is_allowed(value):
-            raise forms.ValidationError("`mkv_path` está fora das pastas permitidas (MKV_ALLOWED_ROOTS).")
-
-        # Mantém formato absoluto para consistência.
-        return os.path.abspath(value)
+    def clean_mkv_file(self):
+        uploaded = self.cleaned_data["mkv_file"]
+        name = (uploaded.name or "").lower()
+        if not name.endswith(".mkv"):
+            raise forms.ValidationError("Envie um arquivo com extensão `.mkv`.")
+        return uploaded
 

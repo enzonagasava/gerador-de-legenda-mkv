@@ -168,4 +168,5 @@ except Exception:
     _default_roots = []
 
 MKV_ALLOWED_ROOTS = _parse_mkv_allowed_roots(os.environ.get("MKV_ALLOWED_ROOTS")) or list(_default_roots)
+MKV_UPLOAD_DIR = os.environ.get("MKV_UPLOAD_DIR", str(BASE_DIR / "uploaded_mkvs"))
 

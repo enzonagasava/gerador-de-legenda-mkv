@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from uuid import uuid4
 
 from django.contrib.auth.decorators import login_required
+from django.conf import settings
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from kombu.exceptions import OperationalError
 
 from jobs.forms import JobCreateForm
-from jobs.models import Job
+from jobs.models import Job, JobLog
 from jobs.tasks import run_job
 
 
@@ -29,19 +33,37 @@ def job_list(request: HttpRequest) -> HttpResponse:
 @login_required(login_url="/web/login/")
 def job_create(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
-        form = JobCreateForm(request.POST)
+        form = JobCreateForm(request.POST, request.FILES)
         if form.is_valid():
             data = form.cleaned_data
+            uploaded = data["mkv_file"]
+            upload_root = Path(getattr(settings, "MKV_UPLOAD_DIR", settings.BASE_DIR / "uploaded_mkvs"))
+            upload_root.mkdir(parents=True, exist_ok=True)
+            target_path = upload_root / f"{uuid4().hex}.mkv"
+            with target_path.open("wb+") as destination:
+                for chunk in uploaded.chunks():
+                    destination.write(chunk)
+
             job = Job.objects.create(
                 created_by=request.user,
                 status=Job.Status.QUEUED,
-                mkv_path=data["mkv_path"],
+                mkv_path=str(target_path.resolve(strict=False)),
                 track_number=data.get("track_number"),
                 idioma_destino=data.get("idioma_destino") or "pt",
                 translation_backend=data.get("translation_backend") or Job.TranslationBackend.LIBRETRANSLATE,
             )
-            # Dispara background.
-            run_job.delay(str(job.id))
+            try:
+                run_job.delay(str(job.id))
+            except OperationalError:
+                job.status = Job.Status.FAILED
+                job.error_message = "Fila Celery/Redis indisponivel. Inicie o Redis e tente novamente."
+                job.save(update_fields=["status", "error_message", "updated_at"])
+                JobLog.objects.create(
+                    job=job,
+                    level=JobLog.Level.ERROR,
+                    message="Falha ao enfileirar no Celery (broker indisponivel).",
+                )
+                return redirect("web-job-detail", job_id=job.id)
             return redirect("web-job-detail", job_id=job.id)
     else:
         form = JobCreateForm()
@@ -66,4 +88,3 @@ def job_detail(request: HttpRequest, job_id) -> HttpResponse:
             "result_files_pretty": result_files_pretty,
         },
     )
-
