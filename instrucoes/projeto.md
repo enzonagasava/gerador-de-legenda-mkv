@@ -7,6 +7,7 @@ Este arquivo centraliza instruções operacionais e decisões de manutenção.
 - O processamento de MKV deve exportar todas as faixas de legenda encontradas.
 - O padrão de nomes deve preservar a faixa (`_faixaN`) para evitar perda por sobrescrita.
 - Tradução automática deve ocorrer por faixa quando o arquivo extraído for SRT.
+- Na interface web de criação de job, o usuário deve enviar o arquivo `.mkv` (upload), sem depender de informar caminho local no servidor.
 
 ## Como atualizar este arquivo
 

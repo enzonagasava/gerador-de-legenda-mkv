@@ -1,4 +1,12 @@
 services:
+  libretranslate:
+    build:
+      context: .
+      dockerfile: docker/libretranslate/docker/Dockerfile
+    ports:
+      - "0.0.0.0:5000:5000"
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
@@ -7,7 +15,7 @@ services:
   postgres:
     image: postgres:16-alpine
     ports:
-      - "5432:5432"
+      - "5431:5432"
     environment:
       POSTGRES_DB: tradutor_legendas
       POSTGRES_USER: tradutor_legendas

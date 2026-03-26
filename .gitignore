@@ -41,6 +41,7 @@ logs/
 *.pid
 *.tmp
 *.swp
+uploaded_mkvs/
 
 # ----------------------------
 # Build / empacotamento
@@ -49,4 +50,5 @@ build/
 dist/
 .eggs/
 *.egg-info/
+.cursor/
 
