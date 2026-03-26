@@ -138,124 +138,42 @@ Configuração (em `config.py`):
 
 Se o OCR ficar incompleto, reconstruir a imagem Docker com uma versão mais nova do `subtitleedit-cli` costuma melhorar a cobertura.
 
-## Integração Django (API + Celery)
+## Repositório desktop (sem Django)
 
-Além do modo CLI (script), este repositório inclui um backend Django para gerenciar extração/tradução em background.
+Este repositório foi simplificado para desktop/CLI:
 
-### O que o Django oferece
+- `core_engine/`: núcleo reutilizável do processamento.
+- `main.py`: entrada da GUI em `PySide6`.
+- `extrair_legendas.py`: modo CLI legado.
 
-- API autenticada por token para criar e consultar jobs.
-- `Celery` (com `Redis`) para executar extração/tradução sem travar a API.
-- `Management command` `run_mkv_watcher` para detectar novos arquivos `.mkv` e enfileirar jobs.
+Para abrir GUI:
 
-### Pré-requisitos
+```bash
+python main.py
+```
 
-- `PostgreSQL` (recomendado; por padrão o Django cai para SQLite quando Postgres não estiver configurado via env).
-- `Redis` para o broker do Celery.
-- `MKVToolNix` e `mkvmerge`/`mkvextract` disponíveis no `PATH` do ambiente onde o worker Celery roda.
-- Se usar OCR automatizado: configurar `seconv` via Docker (ver `docker/`) e os parâmetros em `config.py` (ex.: `SECONV_DOCKER_IMAGE`, `SECONV_OCR_DB`, etc.).
+Para forçar modo CLI:
 
-### Configuração via variáveis de ambiente
+```bash
+python main.py --cli
+```
 
-No ambiente do Django/worker, configure:
+## Gerar executável com PyInstaller
 
-- `DATABASE_URL` (opcional; se definido, substitui `POSTGRES_*`)
-- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT` (quando `DATABASE_URL` não estiver definido)
-- `DJANGO_SECRET_KEY` (opcional; default inseguro-dev apenas para desenvolvimento)
-- `DJANGO_DEBUG` (opcional; default `1`)
-- `DJANGO_ALLOWED_HOSTS` (opcional; default `*`)
-- `CELERY_BROKER_URL` (default: `redis://localhost:6379/0`)
-- `CELERY_RESULT_BACKEND` (default: `django-db`)
-- `MKV_ALLOWED_ROOTS` (lista separada por vírgula com as pastas permitidas; usado para validar `mkv_path` e também para o watcher)
-- `WATCHER_ESTABILIDADE_SEGUNDOS` (default: `5`)
-- `WATCHER_IDIOMA_DESTINO` (default: `pt`)
-- `WATCHER_TRANSLATION_BACKEND` (default: `libretranslate`)
-
-### Setup (migrations + usuário + token)
+Instale dependências:
 
 ```bash
 pip install -r requirements.txt
-python manage.py makemigrations
-python manage.py migrate
-python manage.py createsuperuser
 ```
 
-Para criar um token DRF:
+Build:
 
 ```bash
-python manage.py shell
+pyinstaller tradutor_legendas.spec
 ```
 
-No shell, execute:
+Saída esperada: binário em `dist/tradutor-legendas`.
 
-```python
-from django.contrib.auth import get_user_model
-from rest_framework.authtoken.models import Token
+## Projeto web Django
 
-User = get_user_model()
-u = User.objects.get(username="SEU_USUARIO")
-Token.objects.get_or_create(user=u)
-print(Token.objects.get(user=u).key)
-```
-
-### Rodar servidor e worker
-
-Servidor:
-
-```bash
-python manage.py runserver 0.0.0.0:8000
-```
-
-Worker Celery:
-
-```bash
-celery -A tradutor_legendas worker -l info
-```
-
-Watcher:
-
-```bash
-python manage.py run_mkv_watcher
-```
-
-### API (rotas)
-
-- `POST /api/jobs/` cria um job (gera a extração/tradução em background).
-- `GET /api/jobs/` lista jobs.
-- `GET /api/jobs/{id}/` consulta status/resultado.
-
-Autenticação: envie `Authorization: Token <token>`.
-
-Exemplo de criação:
-
-```bash
-curl -X POST http://localhost:8000/api/jobs/ \
-  -H "Authorization: Token SEU_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mkv_path": "/caminho/para/filme.mkv",
-    "track_number": null,
-    "idioma_destino": "pt",
-    "translation_backend": "libretranslate"
-  }'
-```
-
-### UI Web (Django Templates)
-
-A interface server-side fica em:
-
-- Login: `GET /web/login/`
-- Lista de jobs: `GET /web/jobs/`
-- Criar job: `GET /web/jobs/create/`
-- Detalhe do job: `GET /web/jobs/<uuid>/`
-
-Pré-requisito: você precisa estar logado com um usuário Django (criado via `python manage.py createsuperuser` ou outro método).
-
-Fluxo:
-
-1. Acesse `http://localhost:8000/web/login/` e faça login.
-2. Vá em `http://localhost:8000/web/jobs/create/`.
-3. Faça upload de um arquivo `.mkv` na página de criação de job.
-4. O job será enfileirado via Celery e o status/log aparece em `http://localhost:8000/web/jobs/<uuid>/`.
-
-Por padrão, os arquivos enviados pela UI web são salvos em `uploaded_mkvs/` na raiz do projeto (configurável por `MKV_UPLOAD_DIR`) e depois processados pelo worker.
+A versão web com monetização foi separada para outro repositório (`tradutor-legendas-web`), mantendo API, filas e novas entidades de plano/assinatura.
