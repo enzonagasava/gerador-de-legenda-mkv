@@ -42,6 +42,7 @@ logs/
 *.tmp
 *.swp
 uploaded_mkvs/
+media/
 
 # ----------------------------
 # Build / empacotamento
