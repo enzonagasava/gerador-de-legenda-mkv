@@ -1255,6 +1255,7 @@ class MKVExtractor:
 
         algum_sucesso = False
         srt_pt_gerados: List[str] = []
+        srt_origem_para_limpeza: List[str] = []
         for faixa in faixas_alvo:
             num = faixa["numero"]
             base_saida = str(base.parent / f"{base.stem}_faixa{num}")
@@ -1271,6 +1272,7 @@ class MKVExtractor:
 
             # Caso 1: legenda textual já em SRT.
             if path_extraido.lower().endswith(".srt"):
+                srt_origem_para_limpeza.append(path_extraido)
                 print(f"Traduzindo faixa {num}...")
                 # Mesmo que a tradução falhe ou já exista, tentamos detectar o destino PT.
                 try:
@@ -1308,6 +1310,7 @@ class MKVExtractor:
                 if not srt_ocr or not os.path.isfile(srt_ocr):
                     print(f"Falha no OCR automático da faixa {num}.")
                     continue
+                srt_origem_para_limpeza.append(str(srt_ocr))
 
                 # O OCR já gerou (pelo menos) um .srt consolidado.
                 # Se configurado, apaga o `.sup` (pode ser muito grande).
@@ -1334,6 +1337,7 @@ class MKVExtractor:
         if algum_sucesso and srt_pt_gerados and str(_config("EMBUTIR_SRT_NO_MKV", False)).lower() in ("1", "true", "yes", "sim"):
             try:
                 # Escolhe apenas o MAIOR SRT (normalmente evita incluir legenda curta de abertura).
+                srt_pt_para_limpeza = list(srt_pt_gerados)
                 unique: List[Path] = []
                 seen = set()
                 for p in srt_pt_gerados:
@@ -1355,6 +1359,7 @@ class MKVExtractor:
 
                 out_suffix = str(_config("MKV_MUX_SUFFIX", "_COM_LEGENDA")).strip() or "_COM_LEGENDA"
                 set_default = str(_config("MKV_MUX_SET_DEFAULT", False)).lower() in ("1", "true", "yes", "sim", "on")
+                replace_mode = str(_config("MKV_MUX_REPLACE", False)).lower() in ("1", "true", "yes", "sim", "on")
                 out_mkv_path = base.with_name(base.stem + out_suffix + base.suffix)
                 if out_mkv_path.exists():
                     # Evita sobrescrever: cria sufixo incremental simples.
@@ -1365,13 +1370,73 @@ class MKVExtractor:
                             out_mkv_path = candidate
                             break
                         i += 1
+
+                final_out_mkv_path = out_mkv_path
+                if replace_mode:
+                    # Cria mux em arquivo temporário e depois faz swap.
+                    final_out_mkv_path = base.with_name(base.stem + out_suffix + "_TMP" + base.suffix)
                 self._mux_srt_no_mkv(
                     arquivo_mkv,
                     srt_pt_gerados,
-                    str(out_mkv_path),
+                    str(final_out_mkv_path),
                     idioma_destino=idioma,
                     set_default=set_default,
                 )
+                if replace_mode:
+                    self._replace_mkv_preserving_original(
+                        original_mkv=str(base),
+                        muxed_mkv=str(final_out_mkv_path),
+                        suffix=out_suffix,
+                    )
+
+                # Limpeza opcional: remove os SRTs PT gerados após mux bem-sucedido.
+                if str(_config("APAGAR_SRT_PT_APOS_MUX", True)).lower() in ("1", "true", "yes", "sim", "on"):
+                    removed = 0
+                    for p in srt_pt_para_limpeza:
+                        try:
+                            sp = Path(p)
+                            if sp.is_file():
+                                sp.unlink()
+                                removed += 1
+                        except Exception:
+                            continue
+                    if removed:
+                        print(f"[MUX] SRTs PT removidos após mux: {removed}")
+
+                # Limpeza opcional: remove SRTs originais (extraídos/ocr merged) após mux.
+                if str(_config("APAGAR_SRT_ORIGINAL_APOS_MUX", True)).lower() in ("1", "true", "yes", "sim", "on"):
+                    removed = 0
+                    seen = set()
+                    for p in srt_origem_para_limpeza:
+                        try:
+                            sp = Path(p)
+                            key = str(sp.resolve(strict=False))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            if sp.is_file():
+                                sp.unlink()
+                                removed += 1
+                        except Exception:
+                            continue
+                    if removed:
+                        print(f"[MUX] SRTs originais removidos após mux: {removed}")
+
+                    # Também remove quaisquer SRTs de faixas do MKV atual que ainda restarem
+                    # (ex.: <stem>_faixa3.srt), para evitar arquivos soltos.
+                    try:
+                        extra_removed = 0
+                        for p in base.parent.glob(f"{base.stem}_faixa*.srt"):
+                            try:
+                                if p.is_file():
+                                    p.unlink()
+                                    extra_removed += 1
+                            except Exception:
+                                continue
+                        if extra_removed:
+                            print(f"[MUX] SRTs de faixas removidos após mux: {extra_removed}")
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"Aviso: falha ao embutir legendas no MKV: {e}")
 
@@ -1424,6 +1489,64 @@ class MKVExtractor:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
         if r.returncode != 0:
             raise RuntimeError(f"mkvmerge falhou: {r.stderr or r.stdout}")
+
+    def _replace_mkv_preserving_original(self, original_mkv: str, muxed_mkv: str, suffix: str) -> None:
+        """
+        Faz o muxado assumir o nome do original, preservando o original via move/rename.
+        Nunca deleta o original.
+        """
+        original = Path(original_mkv)
+        muxed = Path(muxed_mkv)
+        if not original.is_file():
+            raise FileNotFoundError(f"MKV original não encontrado: {original_mkv}")
+        if not muxed.is_file():
+            raise FileNotFoundError(f"MKV muxado não encontrado: {muxed_mkv}")
+
+        move_enabled = str(_config("MKV_ORIGINAL_MOVE_ENABLED", False)).lower() in ("1", "true", "yes", "sim", "on")
+        move_dir = str(_config("MKV_ORIGINAL_MOVE_DIR", "")).strip()
+
+        # Decide destino do original
+        dest_original: Path
+        used_fallback = False
+        if move_enabled and move_dir:
+            try:
+                dest_dir = Path(move_dir).expanduser()
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest_original = dest_dir / original.name
+                if dest_original.exists():
+                    i = 2
+                    while True:
+                        cand = dest_dir / f"{original.stem}_{i}{original.suffix}"
+                        if not cand.exists():
+                            dest_original = cand
+                            break
+                        i += 1
+            except Exception as e:
+                used_fallback = True
+                print(
+                    f"Aviso: não foi possível criar/usar MKV_ORIGINAL_MOVE_DIR='{move_dir}' ({e}). "
+                    "Usando fallback para renomear o original ao lado."
+                )
+        else:
+            used_fallback = True
+
+        if used_fallback:
+            # fallback local: renomeia ao lado para não sobrescrever
+            dest_original = original.with_name(original.stem + suffix + "_ORIGINAL" + original.suffix)
+            if dest_original.exists():
+                i = 2
+                while True:
+                    cand = original.with_name(original.stem + suffix + f"_ORIGINAL_{i}" + original.suffix)
+                    if not cand.exists():
+                        dest_original = cand
+                        break
+                    i += 1
+
+        print(f"[MUX] Movendo MKV original para: {dest_original}")
+        shutil.move(str(original), str(dest_original))
+
+        print(f"[MUX] Substituindo MKV original pelo muxado: {original}")
+        shutil.move(str(muxed), str(original))
 
     def processar_lote(self, pastas: Optional[List[str]] = None) -> None:
         """Varre pastas e extrai legenda de cada MKV que ainda não tem arquivo extraído."""
