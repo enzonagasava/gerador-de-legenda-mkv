@@ -73,6 +73,9 @@ Opções: processar um arquivo, processar pastas em lote, processar uma pasta (s
 # Processar um MKV (extrai todas as faixas de legenda)
 python extrair_legendas.py --arquivo /caminho/filme.mkv
 
+# Listar conteúdo do MKV (inspeção: faixas/anexos/capítulos/tags) e sair
+python extrair_legendas.py --arquivo /caminho/filme.mkv --listar-conteudo
+
 # Traduzir um SRT ou ASS/SSA já existente (gera <nome>_PT.srt ou <nome>_PT.ass)
 python extrair_legendas.py --traduzir-srt /caminho/legenda.srt
 python extrair_legendas.py --traduzir-srt /caminho/legenda.ass

@@ -14,6 +14,7 @@ import time
 import argparse
 import threading
 import shlex
+import json
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from queue import Queue, Empty
@@ -372,6 +373,220 @@ class MKVExtractor:
         for f in faixas_legenda:
             f["idioma"] = self._idioma_faixa_mkvinfo(arquivo_mkv, f["numero"])
         return faixas_legenda
+
+    def _mkvmerge_identify_json(self, arquivo_mkv: str) -> Optional[Dict]:
+        """Retorna JSON do `mkvmerge -J` (identify) ou None se falhar."""
+        try:
+            r = subprocess.run(
+                ["mkvmerge", "-J", arquivo_mkv],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if r.returncode != 0:
+                return None
+            raw = (r.stdout or "").strip()
+            if not raw:
+                return None
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def listar_conteudo_mkv(self, arquivo_mkv: str) -> Dict:
+        """Lista conteúdo interno do MKV (faixas + anexos + capítulos/tags quando possível).
+
+        Retorna dict normalizado com chaves:
+        - tracks: [{id,type,codec,language,name,default,forced}]
+        - attachments: [{id,file_name,content_type,size}]
+        - chapters: {present,count}
+        - tags: {present}
+        """
+        arquivo_mkv = os.path.abspath(arquivo_mkv)
+        if not os.path.isfile(arquivo_mkv):
+            raise FileNotFoundError(f"Arquivo não encontrado: {arquivo_mkv}")
+
+        data = self._mkvmerge_identify_json(arquivo_mkv) or {}
+
+        out: Dict[str, object] = {
+            "tracks": [],
+            "attachments": [],
+            "chapters": {"present": False, "count": 0},
+            "tags": {"present": False},
+        }
+
+        # --- Tracks ---
+        tracks_out: List[Dict] = []
+        tracks = data.get("tracks") if isinstance(data, dict) else None
+        if isinstance(tracks, list):
+            for t in tracks:
+                if not isinstance(t, dict):
+                    continue
+                props = t.get("properties") if isinstance(t.get("properties"), dict) else {}
+                codec = (
+                    props.get("codec_id")
+                    or props.get("codec")
+                    or t.get("codec")
+                    or t.get("codec_id")
+                    or ""
+                )
+                lang = props.get("language") or props.get("language_ietf") or ""
+                name = props.get("track_name") or props.get("track_name_utf8") or ""
+                tracks_out.append(
+                    {
+                        "id": t.get("id"),
+                        "type": t.get("type") or t.get("track_type"),
+                        "codec": codec,
+                        "language": lang,
+                        "name": name,
+                        "default": bool(props.get("default_track")) if "default_track" in props else None,
+                        "forced": bool(props.get("forced_track")) if "forced_track" in props else None,
+                    }
+                )
+        out["tracks"] = tracks_out
+
+        # --- Attachments ---
+        atts_out: List[Dict] = []
+        attachments = data.get("attachments") if isinstance(data, dict) else None
+        if isinstance(attachments, list):
+            for a in attachments:
+                if not isinstance(a, dict):
+                    continue
+                props = a.get("properties") if isinstance(a.get("properties"), dict) else {}
+                atts_out.append(
+                    {
+                        "id": a.get("id"),
+                        "file_name": props.get("file_name") or props.get("file_name_utf8") or a.get("file_name") or "",
+                        "content_type": props.get("content_type") or a.get("content_type") or "",
+                        "size": props.get("size") or a.get("size"),
+                    }
+                )
+        out["attachments"] = atts_out
+
+        # --- Chapters / Tags (best-effort) ---
+        chapters_present = False
+        chapters_count = 0
+        for key in ("chapters", "chapter_entries", "chapter_atoms"):
+            v = data.get(key) if isinstance(data, dict) else None
+            if isinstance(v, dict):
+                entries = v.get("entries") or v.get("chapters") or v.get("chapter_entries")
+                if isinstance(entries, list):
+                    chapters_present = True
+                    chapters_count = len(entries)
+                    break
+                chapters_present = True
+            elif isinstance(v, list):
+                chapters_present = True
+                chapters_count = len(v)
+                break
+
+        out["chapters"] = {"present": chapters_present, "count": int(chapters_count)}
+
+        tags_present = False
+        for key in ("tags", "global_tags", "tag_entries"):
+            v = data.get(key) if isinstance(data, dict) else None
+            if v:
+                tags_present = True
+                break
+        out["tags"] = {"present": tags_present}
+
+        # Fallback simples: se JSON falhou, ao menos tenta listar faixas via métodos existentes.
+        if not tracks_out and not data:
+            try:
+                faixas_raw = self._listar_faixas_mkvmerge(arquivo_mkv)
+                # Inclui todas as faixas do mkvmerge -i (não só legendas), sem idioma/nome.
+                out["tracks"] = [
+                    {"id": f.get("numero"), "type": f.get("tipo"), "codec": f.get("codec"), "language": "", "name": "", "default": None, "forced": None}
+                    for f in faixas_raw
+                    if isinstance(f, dict)
+                ]
+            except Exception:
+                pass
+
+        return out
+
+    def print_conteudo_mkv(self, arquivo_mkv: str) -> None:
+        """Imprime conteúdo interno do MKV (modo inspeção)."""
+        info = self.listar_conteudo_mkv(arquivo_mkv)
+
+        mkv = Path(os.path.abspath(arquivo_mkv))
+        print(f"[MKV] {mkv}")
+
+        tracks = info.get("tracks") or []
+        if isinstance(tracks, list) and tracks:
+            print("\n[FAIXAS]")
+            for t in tracks:
+                if not isinstance(t, dict):
+                    continue
+                tid = t.get("id")
+                ttype = (t.get("type") or "").strip()
+                codec = (t.get("codec") or "").strip()
+                lang = (t.get("language") or "").strip()
+                name = (t.get("name") or "").strip()
+                default = t.get("default")
+                forced = t.get("forced")
+
+                flags = []
+                if default is True:
+                    flags.append("default")
+                if forced is True:
+                    flags.append("forced")
+                flags_s = f" [{' '.join(flags)}]" if flags else ""
+
+                parts = []
+                if tid is not None:
+                    parts.append(f"ID {tid}")
+                if ttype:
+                    parts.append(ttype)
+                if codec:
+                    parts.append(codec)
+                if lang:
+                    parts.append(f"lang={lang}")
+                if name:
+                    parts.append(f"nome={name}")
+                line = " - " + " | ".join(parts) + flags_s if parts else " - (faixa)"
+                print(line)
+        else:
+            print("\n[FAIXAS]\n - (nenhuma detectada)")
+
+        attachments = info.get("attachments") or []
+        if isinstance(attachments, list) and attachments:
+            print("\n[ANEXOS]")
+            for a in attachments:
+                if not isinstance(a, dict):
+                    continue
+                aid = a.get("id")
+                fname = (a.get("file_name") or "").strip()
+                ctype = (a.get("content_type") or "").strip()
+                size = a.get("size")
+                parts = []
+                if aid is not None:
+                    parts.append(f"ID {aid}")
+                if fname:
+                    parts.append(fname)
+                if ctype:
+                    parts.append(ctype)
+                if size is not None:
+                    parts.append(f"{size} bytes")
+                print(" - " + " | ".join(parts) if parts else " - (anexo)")
+        else:
+            print("\n[ANEXOS]\n - (nenhum)")
+
+        chapters = info.get("chapters") if isinstance(info, dict) else None
+        if isinstance(chapters, dict):
+            present = bool(chapters.get("present"))
+            count = chapters.get("count")
+            if present:
+                print(f"\n[CAPÍTULOS]\n - presentes (count={count})")
+            else:
+                print("\n[CAPÍTULOS]\n - (não detectados)")
+
+        tags = info.get("tags") if isinstance(info, dict) else None
+        if isinstance(tags, dict):
+            present = bool(tags.get("present"))
+            if present:
+                print("\n[TAGS]\n - presentes")
+            else:
+                print("\n[TAGS]\n - (não detectadas)")
 
     def _mkv_tem_srt_ptbr(self, arquivo_mkv: str) -> bool:
         """
@@ -1437,10 +1652,11 @@ def main_interativo() -> None:
         print("EXTRATOR DE LEGENDAS MKV (SubtitleEdit para OCR/tradução)")
         print("=" * 50)
         print("1. Processar um arquivo MKV")
-        print("2. Processar todos os MKVs das pastas (lote)")
-        print("3. Iniciar watcher (monitorar pastas)")
-        print("4. Processar todos os MKVs de uma pasta (somente essa)")
-        print("5. Sair")
+        print("2. Listar conteúdo de um MKV (faixas/anexos/capítulos/tags)")
+        print("3. Processar todos os MKVs das pastas (lote)")
+        print("4. Iniciar watcher (monitorar pastas)")
+        print("5. Processar todos os MKVs de uma pasta (somente essa)")
+        print("6. Sair")
         op = input("\nEscolha: ").strip()
 
         if op == "1":
@@ -1450,17 +1666,23 @@ def main_interativo() -> None:
             else:
                 print("Arquivo não encontrado.")
         elif op == "2":
-            ext.processar_lote(pastas=pastas)
+            arq = input("Caminho do arquivo MKV: ").strip()
+            if arq and os.path.isfile(arq):
+                ext.print_conteudo_mkv(arq)
+            else:
+                print("Arquivo não encontrado.")
         elif op == "3":
+            ext.processar_lote(pastas=pastas)
+        elif op == "4":
             atraso = _config("WATCHER_ESTABILIDADE_SEGUNDOS", WATCHER_ESTABILIDADE_PADRAO)
             run_watcher(ext, pastas, atraso)
-        elif op == "4":
+        elif op == "5":
             pasta = input("Caminho da pasta MKV: ").strip()
             if pasta:
                 ext.processar_pasta(pasta)
             else:
                 print("Caminho inválido.")
-        elif op == "5":
+        elif op == "6":
             print("Até mais.")
             break
         else:
@@ -1473,6 +1695,11 @@ def main() -> None:
         description="Extrai legendas de MKV e opcionalmente traduz em Python (LibreTranslate)."
     )
     parser.add_argument("--arquivo", "-a", help="Processar um arquivo MKV")
+    parser.add_argument(
+        "--listar-conteudo",
+        action="store_true",
+        help="Somente listar o conteúdo do MKV (faixas/anexos/capítulos/tags) e sair. Requer --arquivo.",
+    )
     parser.add_argument(
         "--traduzir-srt",
         "-t",
@@ -1521,6 +1748,13 @@ def main() -> None:
         return
 
     ext = MKVExtractor()
+
+    if args.listar_conteudo:
+        if not args.arquivo:
+            print("Erro: --listar-conteudo requer --arquivo <mkv>.")
+            return
+        ext.print_conteudo_mkv(args.arquivo)
+        return
 
     if args.arquivo:
         ext.processar_mkv(
