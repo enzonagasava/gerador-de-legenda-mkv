@@ -15,6 +15,9 @@ No `config.py`:
 EMBUTIR_SRT_NO_MKV = True
 MKV_MUX_SUFFIX = "_COM_LEGENDA"
 MKV_MUX_SET_DEFAULT = False
+MKV_MUX_REPLACE = False
+MKV_ORIGINAL_MOVE_ENABLED = False
+MKV_ORIGINAL_MOVE_DIR = ""
 ```
 
 ## Resultado
@@ -29,3 +32,4 @@ Incluindo uma ou mais faixas `.srt` adicionadas.
 
 - O arquivo original **não é alterado**.
 - Para PT-BR, o código de idioma usado é `pt-BR` (quando o destino estiver como `pt`, `pt-BR` ou `pt_br`, o script normaliza para `pt-BR`).
+- Se `MKV_MUX_REPLACE=True`, o script faz o mux em um arquivo temporário e então:\n+  - move o MKV original para `MKV_ORIGINAL_MOVE_DIR` (se habilitado) **ou** renomeia ao lado\n+  - move o MKV muxado para assumir o nome do original\n+  - o original **nunca é deletado**.
