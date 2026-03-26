@@ -373,6 +373,26 @@ class MKVExtractor:
             f["idioma"] = self._idioma_faixa_mkvinfo(arquivo_mkv, f["numero"])
         return faixas_legenda
 
+    def _mkv_tem_srt_ptbr(self, arquivo_mkv: str) -> bool:
+        """
+        Retorna True se o MKV já contiver uma faixa de legenda SubRip/SRT em pt-BR.
+        Usado para evitar gerar/traduzir legendas duplicadas e evitar mux repetido.
+        """
+        try:
+            faixas = self.listar_faixas(arquivo_mkv)
+        except Exception:
+            return False
+
+        for f in faixas:
+            codec = (f.get("codec") or "").upper()
+            idioma = (f.get("idioma") or "").strip().lower()
+            if "SUBRIP" not in codec and "SRT" not in codec:
+                continue
+            # mkvinfo pode retornar ISO-639-2 ("por") ou BCP47 ("pt-BR").
+            if idioma in ("por", "pt", "pt-br", "pt_br", "ptbr") or idioma.startswith("pt-") or "portugu" in idioma:
+                return True
+        return False
+
     def escolher_faixa_auto(self, faixas_legenda: List[Dict]) -> Optional[int]:
         """Preferir inglês; senão a primeira legenda."""
         for f in faixas_legenda:
@@ -984,6 +1004,16 @@ class MKVExtractor:
         if not os.path.isfile(arquivo_mkv):
             print(f"Arquivo não encontrado: {arquivo_mkv}")
             return False
+
+        # Regra (Opção 2): se o MKV já possui uma faixa SubRip/SRT em pt-BR,
+        # não gera/traduz nova legenda e não faz mux para evitar duplicatas.
+        try:
+            if self._mkv_tem_srt_ptbr(arquivo_mkv):
+                print("MKV já possui uma legenda SubRip/SRT em pt-BR — pulando tradução e mux.")
+                return True
+        except Exception:
+            # Se a detecção falhar, segue fluxo normal.
+            pass
 
         faixas = self.listar_faixas(arquivo_mkv)
         if not faixas:
